@@ -1,0 +1,88 @@
+# Build the slim (headless API) QwenPaw backend for Windows + macOS.
+#
+# Produces self-contained onedir bundles (dist/pyinstaller/qwenpaw-slim/)
+# containing a single `qwenpaw` CLI/API executable plus an embedded Python
+# runtime. The target machine needs no Python/Node environment.
+#
+# Unlike the full desktop build (desktop-build.yml), this requires no Node,
+# Rust, NSIS or code-signing: it only stages the bundled Python runtime,
+# installs the Python dependencies, and runs PyInstaller with qwenpaw-slim.spec.
+#
+# Run standalone via workflow_dispatch, or reuse from another workflow via
+# workflow_call (pinned to a commit with `ref`).
+
+name: Slim Backend Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref/SHA to build (default: this workflow's ref)"
+        type: string
+        required: false
+        default: ""
+  workflow_call:
+    inputs:
+      ref:
+        description: "Git ref/SHA to build (pins the build to a commit)"
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  build-slim:
+    name: Build slim backend (${{ matrix.artifact }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            shell: pwsh
+            artifact: windows
+            build: ./scripts/pack-tauri/build_slim.ps1
+          - os: macos-15
+            shell: bash
+            artifact: macos
+            build: |
+              chmod +x scripts/pack-tauri/build_slim.sh
+              bash scripts/pack-tauri/build_slim.sh
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          submodules: recursive
+
+      - name: Get version
+        id: version
+        uses: ./.github/actions/get-version
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Build slim backend
+        shell: ${{ matrix.shell }}
+        env:
+          # Authenticate the python-build-standalone release lookup in
+          # stage_python_runtime.py to avoid anonymous API rate limits.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ${{ matrix.build }}
+
+      - name: Upload slim backend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: qwenpaw-slim-backend-${{ matrix.artifact }}-${{ steps.version.outputs.version }}
+          path: dist/pyinstaller/qwenpaw-slim/
+          if-no-files-found: error
+          retention-days: 14
